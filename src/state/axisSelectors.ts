@@ -121,11 +121,12 @@ export const selectCartesianGraphicalItemsData: (
   axisId: AxisId,
 ) => ChartData = createSelector(
   selectCartesianItemsSettings,
-  (cartesianItems: ReadonlyArray<CartesianGraphicalItemSettings>) =>
-    cartesianItems
+  (cartesianItems: ReadonlyArray<CartesianGraphicalItemSettings>) => {
+    return cartesianItems
       .map(item => item.data)
       .filter(Boolean)
-      .flat(1),
+      .flat(1);
+  },
 );
 
 /**

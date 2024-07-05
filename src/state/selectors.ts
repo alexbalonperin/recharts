@@ -87,7 +87,7 @@ function getSliced<T>(
 
 export const selectTooltipState = (state: RechartsRootState) => state.tooltip;
 
-const selectTooltipTicks = createSelector(selectTooltipAxis, (tooltipAxis: AxisPropsNeededForTicksGenerator) =>
+export const selectTooltipTicks = createSelector(selectTooltipAxis, (tooltipAxis: AxisPropsNeededForTicksGenerator) =>
   getTicksOfAxis(tooltipAxis, false, true),
 );
 
