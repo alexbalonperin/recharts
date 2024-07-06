@@ -1,21 +1,11 @@
-/**
- * @fileOverview Line
- */
-import React, { PureComponent, ReactElement, Ref, useEffect, useRef, useState } from 'react';
+import React, { PureComponent, ReactElement, Ref, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Animate from 'react-smooth';
 import isFunction from 'lodash/isFunction';
 import isNil from 'lodash/isNil';
-import isEqual from 'lodash/isEqual';
 
 import clsx from 'clsx';
-import { selectTooltipTicks } from '../state/selectors';
-import { selectTooltipAxis, useTooltipAxis } from '../context/useTooltipAxis';
-import {
-  selectArbitraryXAxis,
-  selectArbitraryYAxis,
-  selectChartLayout,
-  selectChartOffset,
-} from '../context/chartLayoutContext';
+import { XAxisWithExtraData, YAxisWithExtraData } from '../chart/types';
+import { selectChartLayout, selectChartOffset, useXAxisOrThrow, useYAxisOrThrow } from '../context/chartLayoutContext';
 import { useAppSelector } from '../state/hooks';
 import { selectDisplayedData } from '../state/axisSelectors';
 import { Curve, CurveType, Point as CurvePoint, Props as CurveProps } from '../shape/Curve';
@@ -27,21 +17,14 @@ import { ErrorBar, ErrorBarDataPointFormatter, Props as ErrorBarProps } from './
 import { interpolateNumber, uniqueId } from '../util/DataUtils';
 import { filterProps, findAllByType, hasClipDot } from '../util/ReactUtils';
 import { Global } from '../util/Global';
-import { getBandSizeOfAxis, getCateCoordinateOfLine, getTooltipNameProp, getValueByDataKey } from '../util/ChartUtils';
-import { Props as XAxisProps } from './XAxis';
-import { Props as YAxisProps } from './YAxis';
 import {
-  ActiveDotType,
-  AnimationDuration,
-  AnimationTiming,
-  ChartOffset,
-  D3Scale,
-  DataKey,
-  LayoutType,
-  LegendType,
-  TickItem,
-  TooltipType,
-} from '../util/types';
+  getBandSizeOfAxis,
+  getCateCoordinateOfLine,
+  getTicksOfAxis,
+  getTooltipNameProp,
+  getValueByDataKey,
+} from '../util/ChartUtils';
+import { ActiveDotType, AnimationDuration, AnimationTiming, DataKey, LegendType, TooltipType } from '../util/types';
 import type { Payload as LegendPayload } from '../component/DefaultLegendContent';
 import { useLegendPayloadDispatch } from '../context/legendPayloadContext';
 import { ActivePoints } from '../component/ActivePoints';
@@ -55,14 +38,18 @@ export interface LinePointItem extends CurvePoint {
   payload?: any;
 }
 
+/**
+ * No more cloning = no more internal only props
+ */
 interface InternalLineProps {
-  top?: number;
-  left?: number;
-  width?: number;
-  height?: number;
+  // top?: number;
+  // left?: number;
+  // width?: number;
+  // height?: number;
+  // points stays because its an override
   points?: LinePointItem[];
-  xAxis?: Omit<XAxisProps, 'scale'> & { scale: D3Scale<string | number> };
-  yAxis?: Omit<YAxisProps, 'scale'> & { scale: D3Scale<string | number> };
+  // xAxis?: Omit<XAxisProps, 'scale'> & { scale: D3Scale<string | number> };
+  // yAxis?: Omit<YAxisProps, 'scale'> & { scale: D3Scale<string | number> };
 }
 
 interface LineProps extends InternalLineProps {
@@ -76,7 +63,6 @@ interface LineProps extends InternalLineProps {
   dataKey?: DataKey<any>;
   legendType?: LegendType;
   tooltipType?: TooltipType;
-  layout?: 'horizontal' | 'vertical';
   connectNulls?: boolean;
   hide?: boolean;
 
@@ -105,11 +91,6 @@ interface State {
   curPoints?: LinePointItem[];
   prevAnimationId?: number;
 }
-
-type LineComposedData = ChartOffset & {
-  points?: LinePointItem[];
-  layout: LayoutType;
-};
 
 const computeLegendPayloadFromAreaData = (props: Props): Array<LegendPayload> => {
   const { dataKey, name, stroke, legendType, hide } = props;
@@ -162,37 +143,6 @@ const repeat = (lines: number[], count: number) => {
   return result;
 };
 
-const StaticCurve = ({
-  lineProps,
-  points,
-  needClip,
-  clipPathId,
-  pathRef,
-  curveOptions,
-}: {
-  lineProps: Props;
-  points: LinePointItem[];
-  needClip: boolean;
-  clipPathId: string;
-  pathRef: Ref<SVGPathElement>;
-  curveOptions?: { strokeDasharray: string };
-}) => {
-  const { type, layout, connectNulls, ref, ...others } = lineProps;
-  const curveProps = {
-    ...filterProps(others, true),
-    fill: 'none',
-    className: 'recharts-line-curve',
-    clipPath: needClip ? `url(#clipPath-${clipPathId})` : null,
-    points,
-    ...curveOptions,
-    type,
-    layout,
-    connectNulls,
-  };
-
-  return <Curve {...curveProps} pathRef={pathRef} />;
-};
-
 const generateSimpleStrokeDasharray = (totalLength: number, length: number): string => {
   return `${length}px ${totalLength - length}px`;
 };
@@ -222,6 +172,38 @@ const getStrokeDasharray = (length: number, totalLength: number, lines: number[]
   return [...repeat(lines, count), ...remainLines, ...emptyLines].map(line => `${line}px`).join(', ');
 };
 
+const StaticCurve = ({
+  lineProps,
+  points,
+  needClip,
+  clipPathId,
+  pathRef,
+  curveOptions,
+}: {
+  lineProps: Props;
+  points: LinePointItem[];
+  needClip: boolean;
+  clipPathId: string;
+  pathRef: Ref<SVGPathElement>;
+  curveOptions?: { strokeDasharray: string };
+}) => {
+  const layout = useAppSelector(selectChartLayout);
+  const { type, connectNulls, ref, ...others } = lineProps;
+  const curveProps = {
+    ...filterProps(others, true),
+    fill: 'none',
+    className: 'recharts-line-curve',
+    clipPath: needClip ? `url(#clipPath-${clipPathId})` : null,
+    points,
+    ...curveOptions,
+    type,
+    layout,
+    connectNulls,
+  };
+
+  return <Curve {...curveProps} pathRef={pathRef} />;
+};
+
 const AnimatedCurve = ({
   lineProps,
   prevPoints,
@@ -243,17 +225,17 @@ const AnimatedCurve = ({
   handleAnimationStart: () => void;
   handleAnimationEnd: () => void;
 }) => {
+  const { height, width } = useAppSelector(selectChartOffset);
   const {
-    // points,
     strokeDasharray,
     isAnimationActive,
     animationBegin,
     animationDuration,
     animationEasing,
+    // TODO: animationId is now always undefined - previously it was always updateId from generateCategoricalChart
+    // Determine if this is needed or if we can just remove `key` altogether.
     animationId,
     animateNewValues,
-    width,
-    height,
   } = lineProps;
 
   return (
@@ -269,7 +251,10 @@ const AnimatedCurve = ({
       onAnimationStart={handleAnimationStart}
     >
       {({ t }: { t: number }) => {
-        if (prevPoints) {
+        // this breaks animation. Do we even need to store previous state? Seems to animate fine without doing so.
+        // do we need anything in the if statement? Seems to be a lot there for no usage...
+        // if (prevPoints)
+        if (undefined) {
           const prevPointsDiffFactor = prevPoints.length / currentPoints.length;
           const stepData = currentPoints.map((entry, index) => {
             const prevPointIndex = Math.floor(index * prevPointsDiffFactor);
@@ -303,6 +288,8 @@ const AnimatedCurve = ({
         const curLength = interpolator(t);
         let currentStrokeDasharray;
 
+        // when a strokeDasharry is set there is sometimes issues when animating where you can see the end of the line before it finishes
+        // TODO: investigate and fix
         if (strokeDasharray) {
           const lines = `${strokeDasharray}`.split(/[,\s]+/gim).map(num => parseFloat(num));
           currentStrokeDasharray = getStrokeDasharray(curLength, totalLength, lines);
@@ -342,8 +329,8 @@ const renderDotItem = (option: ActiveDotType, dotProps: any) => {
   return dotItem;
 };
 
-// do we need this? Animation doesn't work with or without it...
-const usePrevious = value => {
+// do we need this? Animation doesn't work with it...
+const usePrevious = (value: any) => {
   const ref = useRef();
   useEffect(() => {
     ref.current = value;
@@ -351,82 +338,100 @@ const usePrevious = value => {
   return ref.current;
 };
 
-const useComposedLineData = (dataKey: DataKey<any>, axisId: string) => {
+const useComposedLineData = (
+  dataKey: DataKey<any>,
+  xAxisId: string | number,
+  yAxisId: string | number,
+): { points: LinePointItem[]; prevPoints: LinePointItem[]; xAxis: XAxisWithExtraData; yAxis: YAxisWithExtraData } => {
   const layout = useAppSelector(selectChartLayout);
-  const tooltipAxis = useTooltipAxis();
-  const tooltipTicks = useAppSelector(selectTooltipTicks);
-  const arbitraryXAxis = useAppSelector(selectArbitraryXAxis);
-  const arbitraryYAxis = useAppSelector(selectArbitraryYAxis);
 
-  // does Line even need this?
+  // we should use matching axes rather than arbirary ones since we know the Line's axisIds.
+  const matchingXAxis = useXAxisOrThrow(xAxisId);
+  const matchingYAxis = useYAxisOrThrow(yAxisId);
+
+  // if we don't throw we know the axisIds are good.
+  const { tooltipAxis, tooltipAxisId } =
+    layout === 'horizontal'
+      ? { tooltipAxis: matchingXAxis, tooltipAxisId: xAxisId }
+      : { tooltipAxis: matchingYAxis, tooltipAxisId: yAxisId };
+
+  // we could select this from redux, but should we? Having matching axisIds is important in the graphical item.
+  const tooltipTicks = getTicksOfAxis(tooltipAxis, false, true);
+
+  // TODO: does Line even need this?
   const bandSize = getBandSizeOfAxis(tooltipAxis, tooltipTicks, false);
 
-  const displayedData = useAppSelector(state => selectDisplayedData(state, tooltipAxis.axisType, axisId));
-  console.log(displayedData);
+  const displayedData = useAppSelector(state => selectDisplayedData(state, tooltipAxis.axisType, tooltipAxisId));
 
-  const points = displayedData.map((entry: Record<string, unknown>, index) => {
+  const points = displayedData.map((entry: Record<string, unknown>, index): LinePointItem => {
     const value = getValueByDataKey(entry, dataKey);
 
     if (layout === 'horizontal') {
       return {
         x: getCateCoordinateOfLine({ axis: tooltipAxis, ticks: tooltipTicks, bandSize, entry, index }),
-        y: isNil(value) ? null : arbitraryYAxis?.scale(value),
+        y: isNil(value) ? null : matchingYAxis?.scale(value),
+        // @ts-expect-error unknown is not assignable to type number
         value,
         payload: entry,
       };
     }
 
     return {
-      x: isNil(value) ? null : arbitraryXAxis?.scale(value),
+      x: isNil(value) ? null : matchingXAxis?.scale(value),
       y: getCateCoordinateOfLine({ axis: tooltipAxis, ticks: tooltipTicks, bandSize, entry, index }),
+      // @ts-expect-error unknown is not assignable to type number
       value,
       payload: entry,
     };
   });
   const prevPoints = usePrevious(points);
 
-  return { points, prevPoints } as { points: LinePointItem[]; prevPoints: LinePointItem[] };
+  return { points, prevPoints, xAxis: matchingXAxis, yAxis: matchingYAxis };
 };
 
 const LineWrapper = (props: Props & { id: string }) => {
-  const {
-    hide,
-    dot,
-    // points,
-    className,
-    xAxis,
-    yAxis,
-    top,
-    left,
-    width,
-    height,
-    isAnimationActive,
-    id,
-    dataKey,
-    yAxisId,
-    xAxisId,
-  } = props;
+  const { hide, dot, className, isAnimationActive, id, dataKey, yAxisId, xAxisId } = props;
   const [isAnimationFinished, setIsAnimationFinished] = useState(true);
   const [totalLength, setTotalLength] = useState(0);
+  const { top, left, height, width } = useAppSelector(selectChartOffset);
+  const layout = useAppSelector(selectChartLayout);
 
-  const { points, prevPoints } = useComposedLineData(dataKey, '0');
+  const {
+    points: calculatedPoints,
+    prevPoints,
+    xAxis,
+    yAxis,
+  } = useComposedLineData(dataKey, props.xAxisId, props.yAxisId);
+  const points = props.points.length > 0 ? props.points : calculatedPoints;
 
   const pathRef = useRef<SVGPathElement>(null);
 
-  useEffect(() => {
-    const getTotalLength = () => {
-      const curveDom = pathRef.current;
+  const getTotalLength = () => {
+    const curveDom = pathRef.current;
 
-      try {
+    try {
+      if (!totalLength || totalLength === 0) {
         return (curveDom && curveDom.getTotalLength && curveDom.getTotalLength()) || 0;
-      } catch (err) {
-        return 0;
       }
-    };
+      return totalLength;
+    } catch (err) {
+      return 0;
+    }
+  };
 
-    const length = getTotalLength();
+  const length = getTotalLength();
+
+  /**
+   * This is expensive. But if we don't use it we always stutter on first render.
+   * TODO: look into other ways of preventing the extra render
+   */
+  useLayoutEffect(() => {
     setTotalLength(length);
-  }, []);
+
+    return () => {
+      setTotalLength(0);
+    };
+  }, [length]);
 
   const handleAnimationEnd = () => {
     setIsAnimationFinished(true);
@@ -448,13 +453,14 @@ const LineWrapper = (props: Props & { id: string }) => {
     if (
       isAnimationActive &&
       points &&
-      points.length &&
-      ((!prevPoints && totalLength > 0) || !isEqual(prevPoints, points))
+      points.length > 0
+      // either of these comparisons break animation at the moment. Are these important? Not sure...
+      // ((!prevPoints && totalLength > 0) || !isEqual(prevPoints, points))
     ) {
       return (
         <AnimatedCurve
           lineProps={props}
-          currentPoints={props.points.length > 0 ? props.points : points}
+          currentPoints={points}
           prevPoints={prevPoints}
           needClip={needClip}
           clipPathId={clipPathId}
@@ -476,7 +482,7 @@ const LineWrapper = (props: Props & { id: string }) => {
       return null;
     }
 
-    const { layout, children } = props;
+    const { children } = props;
     const errorBarItems = findAllByType(children, ErrorBar);
 
     if (!errorBarItems) {
@@ -503,8 +509,11 @@ const LineWrapper = (props: Props & { id: string }) => {
           React.cloneElement(item, {
             key: `bar-${item.props.dataKey}`,
             data: points,
+            // @ts-expect-error scale types are incompatible
             xAxis,
+            // @ts-expect-error scale types are incompatible
             yAxis,
+            // @ts-expect-error layout type includes 'centric' which ErrorBarProps is not thrilled about
             layout,
             dataPointFormatter,
           }),

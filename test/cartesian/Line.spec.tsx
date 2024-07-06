@@ -1,7 +1,6 @@
 import React from 'react';
 import { render } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
-import { scaleLinear } from 'victory-vendor/d3-scale';
 import { Surface, Line, ErrorBar, LineChart, Customized } from '../../src';
 import { useAppSelector } from '../../src/state/hooks';
 import { selectErrorBarsSettings } from '../../src/state/axisSelectors';
@@ -59,7 +58,7 @@ describe('<Line />', () => {
           isAnimationActive={false}
           points={data}
           dot={{ clipDot: false }} // Line must have an XAxis or YAxis in order for clips to render
-          xAxis={{ allowDataOverflow: true, scale: scaleLinear() }}
+          // xAxis={{ allowDataOverflow: true, scale: scaleLinear() }}
         />
       </Surface>,
     );
@@ -81,7 +80,7 @@ describe('<Line />', () => {
           points={data}
           dot={{ clipDot: true }}
           // Line must have an XAxis or YAxis in order for clips to render
-          xAxis={{ allowDataOverflow: true, scale: scaleLinear() }}
+          // xAxis={{ allowDataOverflow: true, scale: scaleLinear() }}
         />
       </Surface>,
     );

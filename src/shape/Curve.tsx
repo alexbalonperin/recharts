@@ -114,6 +114,7 @@ export const getPath = ({
   layout,
   connectNulls = false,
 }: GetPathProps): string | null => {
+  console.log(`expect mono ${type}`);
   const curveFactory = getCurveFactory(type, layout);
   const formatPoints = connectNulls ? points.filter(entry => defined(entry)) : points;
   let lineFunction;
